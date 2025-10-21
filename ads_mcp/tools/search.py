@@ -77,7 +77,7 @@ def _search_tool_description() -> str:
     )
 
     try:
-        with open(utils.GAQL_FILEPATH, "r") as file:
+        with open(utils.get_gaql_resources_filepath(), "r") as file:
             file_content = file.read()
     except FileNotFoundError:
         utils.logger.error("The specified file was not found.")

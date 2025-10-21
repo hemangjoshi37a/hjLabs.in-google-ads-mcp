@@ -28,8 +28,10 @@ from google.ads.googleads.util import get_nested_attr
 import google.auth
 from ads_mcp.mcp_header_interceptor import MCPHeaderInterceptor
 import os
+import importlib.resources
 
-GAQL_FILEPATH = "ads_mcp/gaql_resources.txt"
+# filename for generated field information used by search
+_GAQL_FILENAME = "gaql_resources.json"
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -65,7 +67,7 @@ def _get_googleads_client() -> GoogleAdsClient:
     client = GoogleAdsClient(
         credentials=_create_credentials(),
         developer_token=_get_developer_token(),
-        login_customer_id=_get_login_customer_id()
+        login_customer_id=_get_login_customer_id(),
     )
 
     return client
@@ -96,3 +98,9 @@ def format_output_row(row: proto.Message, attributes):
         attr: format_output_value(get_nested_attr(row, attr))
         for attr in attributes
     }
+
+
+def get_gaql_resources_filepath():
+    package_root = importlib.resources.files("ads_mcp")
+    file_path = package_root.joinpath(_GAQL_FILENAME)
+    return file_path

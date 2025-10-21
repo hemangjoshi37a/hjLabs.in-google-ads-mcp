@@ -77,14 +77,14 @@ def update_gaql_resource_file():
     # Sort the list of resources for consistent output
     output_list.sort(key=lambda x: x["resource"])
 
+    file_path = utils.get_gaql_resources_filepath()
+
     try:
-        with open(utils.GAQL_FILEPATH, "w") as file:
+        with open(file_path, "w") as file:
             json.dump(output_list, file, indent=4)
-        print(f"Successfully updated resource file: {utils.GAQL_FILEPATH}")
+        print(f"Successfully updated resource file: {file_path}")
     except IOError as e:
-        raise RuntimeError(
-            f"Failed to write to file {utils.GAQL_FILEPATH}: {e}"
-        )
+        raise RuntimeError(f"Failed to write to file {file_path}: {e}")
 
 
 if __name__ == "__main__":
