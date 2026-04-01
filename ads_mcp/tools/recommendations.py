@@ -35,15 +35,7 @@ def list_recommendations(
           recommendation.type,
           recommendation.campaign,
           recommendation.ad_group,
-          recommendation.dismissed,
-          recommendation.impact.base_metrics.impressions,
-          recommendation.impact.potential_metrics.impressions,
-          recommendation.impact.base_metrics.clicks,
-          recommendation.impact.potential_metrics.clicks,
-          recommendation.impact.base_metrics.cost_micros,
-          recommendation.impact.potential_metrics.cost_micros,
-          recommendation.impact.base_metrics.conversions,
-          recommendation.impact.potential_metrics.conversions
+          recommendation.dismissed
         FROM recommendation
         WHERE {where_clause}
     """
@@ -53,27 +45,12 @@ def list_recommendations(
     for batch in stream:
         for row in batch.results:
             rec = row.recommendation
-            base = rec.impact.base_metrics
-            potential = rec.impact.potential_metrics
-
-            def _delta(a, b):
-                return round(b - a, 2) if b and a else None
-
             rows.append({
                 "resource_name": rec.resource_name,
                 "type": rec.type_.name,
                 "campaign": rec.campaign,
                 "ad_group": rec.ad_group or None,
                 "dismissed": rec.dismissed,
-                "impact": {
-                    "impressions_delta": _delta(base.impressions, potential.impressions),
-                    "clicks_delta": _delta(base.clicks, potential.clicks),
-                    "conversions_delta": _delta(base.conversions, potential.conversions),
-                    "spend_delta_rupees": _delta(
-                        base.cost_micros / 1_000_000 if base.cost_micros else 0,
-                        potential.cost_micros / 1_000_000 if potential.cost_micros else 0,
-                    ),
-                },
             })
     return rows
 
