@@ -381,12 +381,16 @@ def create_responsive_search_ad(
     headlines: list,
     descriptions: list,
     final_url: str,
+    path1: str = "",
+    path2: str = "",
 ) -> dict:
     """Create a Responsive Search Ad (RSA) in an ad group.
 
     IMPORTANT limits:
     - Headlines: 3-15 items, each max 30 characters
     - Descriptions: 2-4 items, each max 90 characters
+    - path1/path2: Optional display URL path components (each max 15 chars)
+      e.g. path1='AI-Consulting', path2='India' → hjlabs.in/AI-Consulting/India
 
     Args:
         customer_id: Google Ads customer ID (digits only)
@@ -394,6 +398,8 @@ def create_responsive_search_ad(
         headlines: List of headline strings (3-15, each ≤30 chars)
         descriptions: List of description strings (2-4, each ≤90 chars)
         final_url: Landing page URL
+        path1: First display URL path component (optional, max 15 chars)
+        path2: Second display URL path component (optional, max 15 chars)
     """
     # Validate lengths before sending
     errors = []
@@ -403,6 +409,10 @@ def create_responsive_search_ad(
     for i, d in enumerate(descriptions):
         if len(d) > 90:
             errors.append(f"Description {i+1} too long ({len(d)} chars, max 90): '{d}'")
+    if path1 and len(path1) > 15:
+        errors.append(f"path1 too long ({len(path1)} chars, max 15): '{path1}'")
+    if path2 and len(path2) > 15:
+        errors.append(f"path2 too long ({len(path2)} chars, max 15): '{path2}'")
     if errors:
         return {"error": "Text length violations", "details": errors}
 
@@ -417,9 +427,97 @@ def create_responsive_search_ad(
         a = client.get_type("AdTextAsset"); a.text = h; rsa.headlines.append(a)
     for d in descriptions:
         a = client.get_type("AdTextAsset"); a.text = d; rsa.descriptions.append(a)
+    if path1:
+        rsa.path1 = path1
+    if path2:
+        rsa.path2 = path2
     aa.ad.final_urls.append(final_url)
     resp = svc.mutate_ad_group_ads(customer_id=customer_id, operations=[op])
     return {"ad_resource": resp.results[0].resource_name}
+
+
+@mcp.tool()
+def update_ad_group(
+    customer_id: str,
+    ad_group_resource: str,
+    name: str,
+) -> dict:
+    """Update the name of an ad group.
+
+    Args:
+        customer_id: Google Ads customer ID (digits only)
+        ad_group_resource: Ad group resource name (e.g. 'customers/XXX/adGroups/YYY')
+        name: New name for the ad group
+    """
+    client = utils.get_googleads_client()
+    svc = client.get_service("AdGroupService")
+    op = client.get_type("AdGroupOperation")
+    ag = op.update
+    ag.resource_name = ad_group_resource
+    ag.name = name
+    op.update_mask.CopyFrom(field_mask_pb2.FieldMask(paths=["name"]))
+    resp = svc.mutate_ad_groups(customer_id=customer_id, operations=[op])
+    return {"updated": resp.results[0].resource_name, "name": name}
+
+
+@mcp.tool()
+def set_ad_schedule(
+    customer_id: str,
+    campaign_resource: str,
+    schedules: list,
+) -> dict:
+    """Set ad schedule (dayparting) for a campaign. Removes existing schedule first.
+
+    Args:
+        customer_id: Google Ads customer ID (digits only)
+        campaign_resource: Campaign resource name (e.g. 'customers/XXX/campaigns/YYY')
+        schedules: List of schedule dicts, each with:
+            - day_of_week: MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, SATURDAY, SUNDAY
+            - start_hour: 0-23
+            - end_hour: 1-24 (exclusive end, so 17 means ads run until 5pm)
+            - start_minute: ZERO, FIFTEEN, THIRTY, FORTY_FIVE
+            - end_minute: ZERO, FIFTEEN, THIRTY, FORTY_FIVE
+          e.g. [{"day_of_week": "MONDAY", "start_hour": 9, "end_hour": 18,
+                 "start_minute": "ZERO", "end_minute": "ZERO"}]
+    """
+    client = utils.get_googleads_client()
+    svc = client.get_service("CampaignCriterionService")
+
+    # Remove existing ad schedule criteria
+    query = f"""
+        SELECT campaign_criterion.resource_name
+        FROM campaign_criterion
+        WHERE campaign.resource_name = '{campaign_resource}'
+          AND campaign_criterion.type = 'AD_SCHEDULE'
+    """
+    ga_svc = client.get_service("GoogleAdsService")
+    stream = ga_svc.search_stream(customer_id=customer_id, query=query)
+    remove_ops = []
+    for batch in stream:
+        for row in batch.results:
+            remove_op = client.get_type("CampaignCriterionOperation")
+            remove_op.remove = row.campaign_criterion.resource_name
+            remove_ops.append(remove_op)
+    if remove_ops:
+        svc.mutate_campaign_criteria(customer_id=customer_id, operations=remove_ops)
+
+    # Add new schedule
+    create_ops = []
+    for s in schedules:
+        op = client.get_type("CampaignCriterionOperation")
+        cr = op.create
+        cr.campaign = campaign_resource
+        cr.ad_schedule.day_of_week = client.enums.DayOfWeekEnum[s["day_of_week"]]
+        cr.ad_schedule.start_hour = s["start_hour"]
+        cr.ad_schedule.end_hour = s["end_hour"]
+        cr.ad_schedule.start_minute = client.enums.MinuteOfHourEnum[s.get("start_minute", "ZERO")]
+        cr.ad_schedule.end_minute = client.enums.MinuteOfHourEnum[s.get("end_minute", "ZERO")]
+        create_ops.append(op)
+
+    if create_ops:
+        svc.mutate_campaign_criteria(customer_id=customer_id, operations=create_ops)
+
+    return {"schedules_set": len(create_ops), "removed_old": len(remove_ops)}
 
 
 # ─────────────────────────────────────────────
