@@ -148,6 +148,19 @@ def format_output_value(value: Any) -> Any:
     elif isinstance(value, (list, tuple)):
         return [format_output_value(item) for item in value]
     else:
+        # Handle proto repeated fields (RepeatedComposite, RepeatedScalar)
+        try:
+            from proto.marshal.collections.repeated import RepeatedComposite
+            if isinstance(value, RepeatedComposite):
+                return [format_output_value(item) for item in value]
+        except (ImportError, AttributeError):
+            pass
+        try:
+            from proto.marshal.collections.repeated import RepeatedScalar
+            if isinstance(value, RepeatedScalar):
+                return [format_output_value(item) for item in value]
+        except (ImportError, AttributeError):
+            pass
         return value
 
 
