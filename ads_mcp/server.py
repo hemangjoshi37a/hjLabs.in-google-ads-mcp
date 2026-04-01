@@ -21,6 +21,7 @@ from ads_mcp.coordinator import mcp
 # The `# noqa: F401` comment tells the linter to ignore the "unused import"
 # warning.
 from ads_mcp.tools import search, core, get_resource_metadata, campaigns, assets, asset_links  # noqa: F401
+from ads_mcp.tools import billing, analytics, keyword_planning, recommendations, bidding  # noqa: F401
 from ads_mcp.resources import (
     discovery,
     metrics,

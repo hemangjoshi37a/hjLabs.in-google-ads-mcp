@@ -1,5 +1,6 @@
 """Campaign management tools for the Google Ads MCP server."""
 
+from typing import Optional
 from ads_mcp.coordinator import mcp
 import ads_mcp.utils as utils
 from google.ads.googleads.v23.common.types.bidding import TargetSpend
@@ -895,6 +896,49 @@ def list_conversion_actions(
                 "resource_name": ca.resource_name,
             })
     return results
+
+
+@mcp.tool()
+def add_search_terms_as_keywords(
+    customer_id: str,
+    ad_group_resource: str,
+    search_terms: list,
+    match_type: str = "EXACT",
+    cpc_bid_rupees: Optional[float] = None,
+) -> dict:
+    """Add converting/relevant search terms directly as keywords to an ad group.
+
+    Workflow: run get_search_terms_report → identify good terms → call this tool.
+    Also useful for adding them as negative keywords via add_negative_keywords.
+
+    Args:
+        customer_id: Google Ads customer ID (digits only)
+        ad_group_resource: Ad group resource name (e.g. 'customers/XXX/adGroups/YYY')
+        search_terms: List of search term strings to add as keywords
+        match_type: EXACT (default), PHRASE, or BROAD
+        cpc_bid_rupees: Optional CPC bid override in INR. If not set, uses ad group default.
+    """
+    client = utils.get_googleads_client()
+    svc = client.get_service("AdGroupCriterionService")
+
+    ops = []
+    for term in search_terms:
+        op = client.get_type("AdGroupCriterionOperation")
+        crit = op.create
+        crit.ad_group = ad_group_resource
+        crit.status = client.enums.AdGroupCriterionStatusEnum.ENABLED
+        crit.keyword.text = term
+        crit.keyword.match_type = client.enums.KeywordMatchTypeEnum[match_type]
+        if cpc_bid_rupees is not None:
+            crit.cpc_bid_micros = int(cpc_bid_rupees * 1_000_000)
+        ops.append(op)
+
+    resp = svc.mutate_ad_group_criteria(customer_id=customer_id, operations=ops)
+    return {
+        "keywords_added": len(resp.results),
+        "match_type": match_type,
+        "added": [r.resource_name for r in resp.results],
+    }
 
 
 @mcp.tool()
