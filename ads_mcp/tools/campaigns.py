@@ -621,7 +621,8 @@ def get_keyword_performance(
                ad_group.id, ad_group.name,
                metrics.clicks, metrics.impressions, metrics.cost_micros,
                metrics.average_cpc, metrics.ctr, metrics.conversions,
-               metrics.search_impression_share, metrics.quality_score
+               metrics.search_impression_share,
+               ad_group_criterion.quality_info.quality_score
         FROM keyword_view
         WHERE campaign.id = {campaign_id}
           AND ad_group_criterion.status != 'REMOVED'
@@ -643,7 +644,7 @@ def get_keyword_performance(
                 "ad_group_name": row.ad_group.name,
                 "ad_group_criterion_resource": f"customers/{customer_id}/adGroupCriteria/{row.ad_group.id}~{c.criterion_id}",
                 "cpc_bid_rupees": round(c.cpc_bid_micros / 1_000_000, 2),
-                "quality_score": m.quality_score,
+                "quality_score": c.quality_info.quality_score,
                 "clicks": m.clicks,
                 "impressions": m.impressions,
                 "cost_rupees": round(m.cost_micros / 1_000_000, 2),
@@ -817,7 +818,7 @@ def create_conversion_action(
     ca = op.create
     ca.name = name
     ca.type_ = client.enums.ConversionActionTypeEnum.WEBPAGE
-    ca.category = client.enums.ConversionActionCategoryEnum[category]
+    ca.category = getattr(client.enums.ConversionActionCategoryEnum, category)
     ca.status = client.enums.ConversionActionStatusEnum.ENABLED
     ca.value_settings.default_value = 0.0
     ca.value_settings.always_use_default_value = True
