@@ -25,7 +25,7 @@ def list_recommendations(
     client = utils.get_googleads_client()
     svc = client.get_service("GoogleAdsService")
 
-    where_clause = "recommendation.type != 'UNSPECIFIED'"
+    where_clause = "recommendation.dismissed = FALSE"
     if campaign_resource:
         where_clause += f" AND recommendation.campaign = '{campaign_resource}'"
 
@@ -35,9 +35,11 @@ def list_recommendations(
           recommendation.type,
           recommendation.campaign,
           recommendation.ad_group,
-          recommendation.dismissed
+          recommendation.dismissed,
+          recommendation.impact
         FROM recommendation
         WHERE {where_clause}
+        LIMIT 50
     """
 
     rows = []
@@ -45,12 +47,22 @@ def list_recommendations(
     for batch in stream:
         for row in batch.results:
             rec = row.recommendation
+            impact_info = {}
+            try:
+                impact = rec.impact
+                if impact.base_metrics.impressions:
+                    impact_info["base_impressions"] = impact.base_metrics.impressions
+                if impact.potential_metrics.impressions:
+                    impact_info["potential_impressions"] = impact.potential_metrics.impressions
+            except Exception:
+                pass
             rows.append({
                 "resource_name": rec.resource_name,
                 "type": rec.type_.name,
                 "campaign": rec.campaign,
                 "ad_group": rec.ad_group or None,
                 "dismissed": rec.dismissed,
+                "impact": impact_info,
             })
     return rows
 

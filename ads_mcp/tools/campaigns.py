@@ -353,8 +353,10 @@ def add_campaign_negative_keywords(
     Args:
         customer_id: Google Ads customer ID (digits only)
         campaign_resource: Campaign resource name
-        keywords: List of dicts with keys 'text' and 'match_type' (BROAD, PHRASE, or EXACT)
-                  e.g. [{"text": "free", "match_type": "BROAD"}, {"text": "tutorial", "match_type": "BROAD"}]
+        keywords: List of keyword strings OR dicts with 'text' and 'match_type'.
+                  Simple: ["free", "tutorial", "course"]
+                  Detailed: [{"text": "free", "match_type": "BROAD"}]
+                  When strings are passed, PHRASE match type is used by default.
     """
     client = utils.get_googleads_client()
     svc = client.get_service("CampaignCriterionService")
@@ -364,8 +366,12 @@ def add_campaign_negative_keywords(
         c = op.create
         c.campaign = campaign_resource
         c.negative = True
-        c.keyword.text = kw["text"]
-        c.keyword.match_type = client.enums.KeywordMatchTypeEnum[kw["match_type"]]
+        if isinstance(kw, str):
+            c.keyword.text = kw
+            c.keyword.match_type = client.enums.KeywordMatchTypeEnum.PHRASE
+        else:
+            c.keyword.text = kw["text"]
+            c.keyword.match_type = client.enums.KeywordMatchTypeEnum[kw["match_type"]]
         ops.append(op)
     svc.mutate_campaign_criteria(customer_id=customer_id, operations=ops)
     return {"campaign_negative_keywords_created": len(ops)}

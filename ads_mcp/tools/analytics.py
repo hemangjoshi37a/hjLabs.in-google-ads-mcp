@@ -38,7 +38,7 @@ def get_device_performance(
           metrics.conversions,
           metrics.ctr,
           metrics.average_cpc,
-          metrics.conversion_rate,
+          metrics.conversions,
           metrics.cost_per_conversion
         FROM campaign
         WHERE {where_clause}
@@ -59,7 +59,7 @@ def get_device_performance(
                 "spend_rupees": round(m.cost_micros / 1_000_000, 2),
                 "avg_cpc_rupees": round(m.average_cpc / 1_000_000, 2),
                 "conversions": round(m.conversions, 2),
-                "conversion_rate_pct": round(m.conversion_rate * 100, 2),
+                "conversions": m.conversions,
                 "cost_per_conversion_rupees": round(m.cost_per_conversion / 1_000_000, 2) if m.conversions > 0 else None,
             })
     return rows
@@ -100,8 +100,7 @@ def get_geo_performance(
           metrics.cost_micros,
           metrics.conversions,
           metrics.ctr,
-          metrics.average_cpc,
-          metrics.conversion_rate
+          metrics.average_cpc
         FROM geographic_view
         WHERE {where_clause}
         ORDER BY metrics.cost_micros DESC
@@ -124,7 +123,7 @@ def get_geo_performance(
                 "spend_rupees": round(m.cost_micros / 1_000_000, 2),
                 "avg_cpc_rupees": round(m.average_cpc / 1_000_000, 2),
                 "conversions": round(m.conversions, 2),
-                "conversion_rate_pct": round(m.conversion_rate * 100, 2),
+                "conversions": m.conversions,
             })
     return rows
 
@@ -302,6 +301,230 @@ def get_auction_insights(
                 "abs_top_of_page_rate_pct": round(ai.abs_top_of_page_rate * 100, 1),
             })
     return rows
+
+
+@mcp.tool()
+def get_user_location_performance(
+    customer_id: str,
+    date_range: str = "LAST_30_DAYS",
+    campaign_resource: Optional[str] = None,
+    targeting_status: str = "ALL",
+    limit: int = 50,
+) -> list:
+    """Get performance by the ACTUAL physical location of the user who clicked.
+
+    This is different from `get_geo_performance` which shows targeted-location data.
+    `user_location_view` reveals where clickers were physically located — critical
+    when you want to know if your "Global" campaign is actually reaching the markets
+    you expect. Exposes country_criterion_id which you decode via well-known IDs
+    (2840=US, 2356=India, 2784=UAE, 2682=Saudi, 2276=Germany, 2826=UK, etc.).
+
+    Args:
+        customer_id: Google Ads customer ID (digits only)
+        date_range: LAST_7_DAYS, LAST_30_DAYS, LAST_90_DAYS, THIS_MONTH, LAST_MONTH,
+                    TODAY, YESTERDAY, or a literal range 'YYYY-MM-DD TO YYYY-MM-DD'
+        campaign_resource: Optional — filter to one campaign
+        targeting_status: ALL, TARGETING_LOCATION, or NOT_TARGETING_LOCATION.
+                          TARGETING_LOCATION shows only clicks from within your
+                          targeted geos; NOT_TARGETING_LOCATION shows spillover from
+                          "people searching for" your targeted places but located elsewhere.
+        limit: Max rows to return (default 50)
+    """
+    client = utils.get_googleads_client()
+    svc = client.get_service("GoogleAdsService")
+
+    if " TO " in date_range:
+        start, end = date_range.split(" TO ")
+        date_clause = f"segments.date BETWEEN '{start.strip()}' AND '{end.strip()}'"
+    else:
+        date_clause = f"segments.date DURING {date_range}"
+
+    where_clause = date_clause
+    if campaign_resource:
+        where_clause += f" AND campaign.resource_name = '{campaign_resource}'"
+    if targeting_status == "TARGETING_LOCATION":
+        where_clause += " AND user_location_view.targeting_location = TRUE"
+    elif targeting_status == "NOT_TARGETING_LOCATION":
+        where_clause += " AND user_location_view.targeting_location = FALSE"
+
+    query = f"""
+        SELECT
+          campaign.name,
+          campaign.resource_name,
+          user_location_view.country_criterion_id,
+          user_location_view.targeting_location,
+          metrics.impressions,
+          metrics.clicks,
+          metrics.cost_micros,
+          metrics.conversions,
+          metrics.ctr,
+          metrics.average_cpc
+        FROM user_location_view
+        WHERE {where_clause}
+        ORDER BY metrics.cost_micros DESC
+        LIMIT {limit}
+    """
+
+    rows = []
+    stream = svc.search_stream(customer_id=customer_id, query=query)
+    for batch in stream:
+        for row in batch.results:
+            m = row.metrics
+            ulv = row.user_location_view
+            rows.append({
+                "campaign": row.campaign.name,
+                "country_criterion_id": ulv.country_criterion_id,
+                "targeting_location": ulv.targeting_location,
+                "impressions": m.impressions,
+                "clicks": m.clicks,
+                "ctr_pct": round(m.ctr * 100, 2),
+                "spend_rupees": round(m.cost_micros / 1_000_000, 2),
+                "avg_cpc_rupees": round(m.average_cpc / 1_000_000, 2),
+                "conversions": round(m.conversions, 2),
+            })
+    return rows
+
+
+@mcp.tool()
+def get_landing_page_performance(
+    customer_id: str,
+    date_range: str = "LAST_30_DAYS",
+    campaign_resource: Optional[str] = None,
+    limit: int = 30,
+) -> list:
+    """Get performance broken down by landing page URL.
+
+    Shows which pages drive conversions and which pages burn clicks. Essential
+    for landing-page-level optimization — pages with low conversion rate often
+    have a relevance or trust-signal problem.
+
+    Args:
+        customer_id: Google Ads customer ID (digits only)
+        date_range: LAST_7_DAYS, LAST_30_DAYS, LAST_90_DAYS, etc.
+        campaign_resource: Optional — filter to one campaign
+        limit: Max rows to return (default 30)
+    """
+    client = utils.get_googleads_client()
+    svc = client.get_service("GoogleAdsService")
+
+    where_clause = f"segments.date DURING {date_range}"
+    if campaign_resource:
+        where_clause += f" AND campaign.resource_name = '{campaign_resource}'"
+
+    query = f"""
+        SELECT
+          campaign.name,
+          campaign.resource_name,
+          landing_page_view.unexpanded_final_url,
+          metrics.impressions,
+          metrics.clicks,
+          metrics.cost_micros,
+          metrics.conversions,
+          metrics.ctr,
+          metrics.average_cpc
+        FROM landing_page_view
+        WHERE {where_clause}
+        ORDER BY metrics.cost_micros DESC
+        LIMIT {limit}
+    """
+
+    rows = []
+    stream = svc.search_stream(customer_id=customer_id, query=query)
+    for batch in stream:
+        for row in batch.results:
+            m = row.metrics
+            conv = m.conversions
+            clicks = m.clicks
+            conv_rate = round((conv / clicks * 100), 2) if clicks > 0 else 0.0
+            rows.append({
+                "campaign": row.campaign.name,
+                "landing_url": row.landing_page_view.unexpanded_final_url,
+                "impressions": m.impressions,
+                "clicks": clicks,
+                "ctr_pct": round(m.ctr * 100, 2),
+                "spend_rupees": round(m.cost_micros / 1_000_000, 2),
+                "avg_cpc_rupees": round(m.average_cpc / 1_000_000, 2),
+                "conversions": round(conv, 2),
+                "conversion_rate_pct": conv_rate,
+            })
+    return rows
+
+
+@mcp.tool()
+def get_audience_insights(
+    customer_id: str,
+    campaign_resource: Optional[str] = None,
+    date_range: str = "LAST_30_DAYS",
+) -> list:
+    """Get ad-group-level demographic and audience performance.
+
+    Returns age, gender, parental-status, household-income, and audience
+    performance segments. Use to find where the money sits — e.g. which income
+    bracket actually converts on your campaign.
+
+    Args:
+        customer_id: Google Ads customer ID (digits only)
+        campaign_resource: Optional — filter to one campaign
+        date_range: LAST_7_DAYS, LAST_30_DAYS, LAST_90_DAYS, etc.
+    """
+    client = utils.get_googleads_client()
+    svc = client.get_service("GoogleAdsService")
+
+    where_clause = f"segments.date DURING {date_range}"
+    if campaign_resource:
+        where_clause += f" AND campaign.resource_name = '{campaign_resource}'"
+
+    resources_to_query = [
+        ("age_range_view", "age_range_view.resource_name", "age"),
+        ("gender_view", "gender_view.resource_name", "gender"),
+        ("parental_status_view", "parental_status_view.resource_name", "parental"),
+    ]
+
+    all_rows = []
+    for resource, id_field, segment_type in resources_to_query:
+        query = f"""
+            SELECT
+              campaign.name,
+              ad_group.name,
+              {id_field},
+              ad_group_criterion.age_range.type,
+              ad_group_criterion.gender.type,
+              ad_group_criterion.parental_status.type,
+              metrics.impressions,
+              metrics.clicks,
+              metrics.cost_micros,
+              metrics.conversions,
+              metrics.ctr
+            FROM {resource}
+            WHERE {where_clause}
+            ORDER BY metrics.cost_micros DESC
+        """
+        try:
+            stream = svc.search_stream(customer_id=customer_id, query=query)
+            for batch in stream:
+                for row in batch.results:
+                    m = row.metrics
+                    crit = row.ad_group_criterion
+                    if segment_type == "age":
+                        label = crit.age_range.type_.name
+                    elif segment_type == "gender":
+                        label = crit.gender.type_.name
+                    else:
+                        label = crit.parental_status.type_.name
+                    all_rows.append({
+                        "segment_type": segment_type,
+                        "segment_value": label,
+                        "campaign": row.campaign.name,
+                        "ad_group": row.ad_group.name,
+                        "impressions": m.impressions,
+                        "clicks": m.clicks,
+                        "ctr_pct": round(m.ctr * 100, 2),
+                        "spend_rupees": round(m.cost_micros / 1_000_000, 2),
+                        "conversions": round(m.conversions, 2),
+                    })
+        except Exception as e:
+            all_rows.append({"error": f"{segment_type}: {str(e)[:200]}"})
+    return all_rows
 
 
 @mcp.tool()

@@ -200,6 +200,190 @@ def set_target_impression_share(
     }
 
 
+def _pct_to_bid_modifier(pct: float) -> float:
+    """Convert a percentage bid adjustment to Google Ads bid_modifier multiplier.
+
+    -90% → 0.1, -50% → 0.5, 0% → 1.0, +50% → 1.5, +900% → 10.0
+    Google Ads valid range for device/location: 0.1 to 10.0 (i.e. -90% to +900%).
+    -100% is only allowed on DESKTOP/TABLET for some campaign types and maps to 0.1
+    as the safest floor.
+    """
+    if pct <= -100:
+        return 0.1
+    mult = 1.0 + (pct / 100.0)
+    return max(0.1, min(10.0, mult))
+
+
+@mcp.tool()
+def set_device_bid_adjustment(
+    customer_id: str,
+    campaign_resource: str,
+    device: str,
+    bid_adjustment_pct: float,
+) -> dict:
+    """Set a device bid adjustment on a campaign (upsert — creates or updates).
+
+    Use this to shift spend toward converting devices. For example, if mobile
+    converts well and desktop wastes budget, set DESKTOP to -90%.
+
+    Args:
+        customer_id: Google Ads customer ID (digits only)
+        campaign_resource: Campaign resource name (e.g. 'customers/XXX/campaigns/YYY')
+        device: MOBILE, DESKTOP, TABLET, or CONNECTED_TV
+        bid_adjustment_pct: Adjustment in percent. -90 = bid 90% less, +50 = bid 50% more.
+                            Valid range: -90 to +900. (-100 is clamped to -90.)
+    """
+    client = utils.get_googleads_client()
+    svc = client.get_service("CampaignCriterionService")
+    ga_svc = client.get_service("GoogleAdsService")
+
+    bid_modifier = _pct_to_bid_modifier(bid_adjustment_pct)
+    device_enum = client.enums.DeviceEnum[device]
+
+    query = f"""
+        SELECT campaign_criterion.resource_name, campaign_criterion.device.type
+        FROM campaign_criterion
+        WHERE campaign.resource_name = '{campaign_resource}'
+          AND campaign_criterion.type = 'DEVICE'
+    """
+    existing_resource = None
+    stream = ga_svc.search_stream(customer_id=customer_id, query=query)
+    for batch in stream:
+        for row in batch.results:
+            if row.campaign_criterion.device.type_ == device_enum:
+                existing_resource = row.campaign_criterion.resource_name
+                break
+
+    from google.protobuf import field_mask_pb2
+    op = client.get_type("CampaignCriterionOperation")
+    if existing_resource:
+        crit = op.update
+        crit.resource_name = existing_resource
+        crit.bid_modifier = bid_modifier
+        op.update_mask.CopyFrom(field_mask_pb2.FieldMask(paths=["bid_modifier"]))
+        action = "updated"
+    else:
+        crit = op.create
+        crit.campaign = campaign_resource
+        crit.device.type_ = device_enum
+        crit.bid_modifier = bid_modifier
+        action = "created"
+
+    resp = svc.mutate_campaign_criteria(customer_id=customer_id, operations=[op])
+    return {
+        action: resp.results[0].resource_name,
+        "device": device,
+        "bid_adjustment_pct": bid_adjustment_pct,
+        "bid_modifier": round(bid_modifier, 3),
+    }
+
+
+@mcp.tool()
+def set_location_bid_adjustment(
+    customer_id: str,
+    campaign_resource: str,
+    geo_target_constant_id: str,
+    bid_adjustment_pct: float,
+) -> dict:
+    """Set a location bid adjustment on a campaign (upsert — creates or updates).
+
+    Use this to bid more aggressively in high-converting cities or reduce bids
+    in wasteful geographies. The location must already be in campaign targeting.
+
+    Common geo_target_constant IDs:
+      2356 = India, 1007751 = Ahmedabad, 1007767 = Mumbai, 1007754 = Bangalore,
+      1007764 = Delhi, 2840 = United States, 2826 = United Kingdom
+
+    Args:
+        customer_id: Google Ads customer ID (digits only)
+        campaign_resource: Campaign resource name
+        geo_target_constant_id: Numeric geo target constant ID (digits only)
+        bid_adjustment_pct: Adjustment in percent. Valid range -90 to +900.
+    """
+    client = utils.get_googleads_client()
+    svc = client.get_service("CampaignCriterionService")
+    ga_svc = client.get_service("GoogleAdsService")
+
+    bid_modifier = _pct_to_bid_modifier(bid_adjustment_pct)
+    geo_resource = f"geoTargetConstants/{geo_target_constant_id}"
+
+    query = f"""
+        SELECT campaign_criterion.resource_name,
+               campaign_criterion.location.geo_target_constant
+        FROM campaign_criterion
+        WHERE campaign.resource_name = '{campaign_resource}'
+          AND campaign_criterion.type = 'LOCATION'
+    """
+    existing_resource = None
+    stream = ga_svc.search_stream(customer_id=customer_id, query=query)
+    for batch in stream:
+        for row in batch.results:
+            if row.campaign_criterion.location.geo_target_constant == geo_resource:
+                existing_resource = row.campaign_criterion.resource_name
+                break
+
+    from google.protobuf import field_mask_pb2
+    op = client.get_type("CampaignCriterionOperation")
+    if existing_resource:
+        crit = op.update
+        crit.resource_name = existing_resource
+        crit.bid_modifier = bid_modifier
+        op.update_mask.CopyFrom(field_mask_pb2.FieldMask(paths=["bid_modifier"]))
+        action = "updated"
+    else:
+        crit = op.create
+        crit.campaign = campaign_resource
+        crit.location.geo_target_constant = geo_resource
+        crit.bid_modifier = bid_modifier
+        action = "created"
+
+    resp = svc.mutate_campaign_criteria(customer_id=customer_id, operations=[op])
+    return {
+        action: resp.results[0].resource_name,
+        "geo_target_constant_id": geo_target_constant_id,
+        "bid_adjustment_pct": bid_adjustment_pct,
+        "bid_modifier": round(bid_modifier, 3),
+    }
+
+
+@mcp.tool()
+def list_device_bid_adjustments(
+    customer_id: str,
+    campaign_resource: str,
+) -> list:
+    """List current device bid adjustments on a campaign.
+
+    Args:
+        customer_id: Google Ads customer ID (digits only)
+        campaign_resource: Campaign resource name
+    """
+    client = utils.get_googleads_client()
+    ga_svc = client.get_service("GoogleAdsService")
+    query = f"""
+        SELECT campaign_criterion.resource_name,
+               campaign_criterion.device.type,
+               campaign_criterion.bid_modifier,
+               campaign_criterion.negative
+        FROM campaign_criterion
+        WHERE campaign.resource_name = '{campaign_resource}'
+          AND campaign_criterion.type = 'DEVICE'
+    """
+    rows = []
+    stream = ga_svc.search_stream(customer_id=customer_id, query=query)
+    for batch in stream:
+        for row in batch.results:
+            cc = row.campaign_criterion
+            mult = cc.bid_modifier if cc.bid_modifier else 1.0
+            rows.append({
+                "resource_name": cc.resource_name,
+                "device": cc.device.type_.name,
+                "bid_modifier": round(mult, 3),
+                "bid_adjustment_pct": round((mult - 1.0) * 100, 1),
+                "negative": cc.negative,
+            })
+    return rows
+
+
 @mcp.tool()
 def update_keyword_bids_bulk(
     customer_id: str,

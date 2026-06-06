@@ -468,7 +468,7 @@ def create_lead_form_asset(
     lead_form.headline = headline
     lead_form.description = description
     lead_form.privacy_policy_url = privacy_policy_url
-    lead_form.call_to_action_description = description
+    lead_form.call_to_action_description = headline
     asset.final_urls.append(privacy_policy_url)
 
     cta_enum = client.enums.LeadFormCallToActionTypeEnum
